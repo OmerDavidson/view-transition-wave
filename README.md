@@ -53,11 +53,13 @@ import { flushSync } from 'react-dom';
 
 ### Warm up
 
-The first wave draws its displacement maps and compiles its shaders, which takes a few tens of ms. To do that ahead of time:
+The first wave in a scope draws and decodes its displacement maps, and the first wave on the page compiles the light's shaders. That delays its start by up to a couple of hundred ms. Both are kept: the maps depend on the scope's size and the shape, not on where the wave starts, and every wave shares one WebGL context. To do it all ahead of time:
 
 ```js
 requestIdleCallback(() => prepareWaveTransition({ origin: themeSwitch }));
 ```
+
+It prepares the ring and the band for that scope, so waves from any origin in it start right away. Call it once per scope you'll wave (for example, once for the page and once for a card).
 
 ## Options
 
@@ -83,6 +85,7 @@ Other exports are `prepareWaveTransition(options)`, `isWaveTransitionSupported()
 
 - **Your update always runs.** Without view transitions, it runs with no animation, and `ready` rejects (as it does when a view transition is skipped). Without WebGL2, the page still bends but has no light.
 - **It aims for 25 fps.** With `quality: 'auto'`, the wave times its own frames. If they come slower than 25 fps, it sheds the costliest part still playing, several at once when frames are far over budget. The next wave starts at the level this one ended at, and tries one level higher after three waves in a row with frames to spare.
+- **The window's edges show the page's background.** Where the inhale or the lens draws a whole-page wave in from the edges, the old page's background shows outside the front and the new page's inside it, never black.
 - **One at a time.** A new wave skips the one still playing, as a new view transition does.
 - **Named elements are flattened.** While a wave plays, elements inside the scope that have their own `view-transition-name` are un-named. Otherwise the browser would draw them above the bent snapshot, untouched. Their names come back afterwards.
 - **Other view transitions are left alone.** The wave's styles only apply while it plays.

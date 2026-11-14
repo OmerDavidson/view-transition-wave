@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { frontRadii, planWave, revealMasks } from '../src/plan';
+import { frontRadii, planWave, revealBackdrop, revealMasks } from '../src/plan';
 import { PLAYING_CLASS, WAVE_TRANSITION_NAME } from '../src/styles';
 import { NO_BEND, levelsToShed } from '../src/quality';
 import { isWaveTransitionSupported, waveTransition } from '../src/transition';
@@ -91,6 +91,14 @@ describe('revealMasks', () => {
     expect(masks.revealed).toContain(`${200 / 1.4}px 200px at 114px 124px, #000`);
     expect(masks.remaining).toContain(`${200 / 1.4}px 200px at 114px 124px, transparent`);
     expect(frontRadii(launched, true)).toEqual([200, 200 / 1.4]);
+  });
+
+  it('splits the backdrop the same way, in the scope\'s own px', () => {
+    const { config } = planWave({ origin: button(120, 32) });
+    const frame = { launched: false, radius: 0, squash: 1, ox: 0, oy: 0 } as Parameters<typeof revealBackdrop>[0];
+    expect(revealBackdrop(frame, config, false, 'white', 'black')).toBe('linear-gradient(white, white)');
+    const launched = { ...frame, launched: true, radius: 200, squash: 1.4, ox: 50, oy: 60 };
+    expect(revealBackdrop(launched, config, false, 'white', 'black')).toContain(`${200 / 1.4}px 200px at 50px 60px, black`);
   });
 });
 

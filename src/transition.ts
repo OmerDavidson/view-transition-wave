@@ -1,8 +1,8 @@
 import { makeParticles, particleAt, frameState } from 'distortion-wave/src/core.js';
-import { createWaveEffects } from './effects';
+import { createWaveEffects, prepareEffects } from './effects';
 import { mountWaveFilter } from './filter';
-import { waveMaps } from './maps';
-import { INITIAL_MASKS, planWave, revealMasks } from './plan';
+import { decodeMaps, waveMaps } from './maps';
+import { INITIAL_MASKS, planWave, revealBackdrop, revealMasks } from './plan';
 import {
   FRAME_GAP,
   FRAME_SPARE,
@@ -86,6 +86,17 @@ const pseudoStyle = (pseudoElement: string) => {
     },
     remove: () => animation?.cancel(),
   };
+};
+
+/** The page's background colour, which shows where the wave bends the page in from the window's edges. */
+const pageBackground = (): string => {
+  for (const element of [document.documentElement, document.body]) {
+    const color = element ? getComputedStyle(element).backgroundColor : '';
+    if (color && color !== 'transparent' && !/^rgba\(.*,\s*0\)$/.test(color)) {
+      return color;
+    }
+  }
+  return 'Canvas';
 };
 
 /**
@@ -196,9 +207,17 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
   const groupStyle = pseudoStyle(`::view-transition-group(${WAVE_TRANSITION_NAME})`);
   const newStyle = pseudoStyle(`::view-transition-new(${WAVE_TRANSITION_NAME})`);
   const oldStyle = pseudoStyle(`::view-transition-old(${WAVE_TRANSITION_NAME})`);
+  // Behind the whole page, nothing is drawn: where the pull or the lens draws the page in from the
+  // window's edges, that would show as black. The page's background shows there instead (see
+  // revealBackdrop).
+  const backdropStyle = pseudoStyle('::view-transition');
+  const oldBackground = root ? pageBackground() : '';
+  let newBackground = oldBackground;
+  const maps = waveMaps(config, plan.reach);
+  const mapsDecoded = decodeMaps(maps);
   const filter = mountWaveFilter(
     config,
-    waveMaps(config, plan.reach),
+    maps,
     { width: box.width, height: box.height, sideways },
     value => groupStyle.set({ filter: value }),
   );
@@ -258,14 +277,12 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
     }
     pageBack = true;
     html.classList.remove(PLAYING_CLASS);
-    [groupStyle, newStyle, oldStyle].forEach(style => style.remove());
+    [groupStyle, newStyle, oldStyle, backdropStyle].forEach(style => style.remove());
     named.style.viewTransitionName = inlineName;
     restoreNames();
     filter.remove();
     // The light keeps fading over the live page.
-    if (effects) {
-      effects.canvas.style.viewTransitionName = '';
-    }
+    effects?.leaveTransition();
     interactive.resolve();
   };
   const endLight = () => {
@@ -296,6 +313,9 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
       const masks = revealMasks(state, config, sideways);
       newStyle.set({ maskImage: masks.revealed });
       oldStyle.set({ maskImage: masks.remaining });
+      if (root) {
+        backdropStyle.set({ backgroundImage: revealBackdrop(state, config, sideways, oldBackground, newBackground) });
+      }
     } else if (effects && !root) {
       // The page can scroll again: keep the light on the scope.
       const rect = scope.getBoundingClientRect();
@@ -325,10 +345,14 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
 
   const viewTransition = startViewTransition(async () => {
     await runUpdate();
-    // Only in the new state, so the light is a layer of its own above both snapshots.
-    if (effects) {
-      document.body.appendChild(effects.canvas);
+    if (root) {
+      newBackground = pageBackground();
     }
+    // Only in the new state, so the light is a layer of its own above both snapshots.
+    effects?.attach();
+    // The browser keeps showing the old page until this returns: the filter's maps are ready by its
+    // first frame (they're decoded once, and kept).
+    await mapsDecoded;
   }, options.types);
 
   skip = () => {
@@ -352,6 +376,12 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
       groupStyle.hold({ filter: 'none' }, settledAt * 1000);
       newStyle.hold({ maskImage: INITIAL_MASKS.revealed }, settledAt * 1000);
       oldStyle.hold({ maskImage: INITIAL_MASKS.remaining }, settledAt * 1000);
+      if (root) {
+        backdropStyle.hold(
+          { backgroundImage: revealBackdrop(frameState(0, config, geometry), config, sideways, oldBackground, oldBackground) },
+          settledAt * 1000,
+        );
+      }
       start = performance.now();
       ready.resolve();
       frame = requestAnimationFrame(tick);
@@ -367,15 +397,29 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
   return transition;
 };
 
+const whenIdle = (callback: () => void) =>
+  typeof requestIdleCallback === 'function' ? requestIdleCallback(callback) : window.setTimeout(callback, 50);
+
+/** Draws and decodes the maps a wave with these options needs, as far as any origin could take it. */
+const prepareMaps = (options: WaveTransitionOptions) => {
+  const { config, box } = planWave(options);
+  // The farthest a front can go in this scope: from one corner past the opposite one.
+  const farthest = (Math.hypot(box.width, box.height) + config.swell) * 1.4 + config.margin * 2.6;
+  void decodeMaps(waveMaps(config, farthest));
+};
+
 /**
- * Does the slow part of a wave ahead of time (drawing the filter's maps, compiling the shaders), for a
- * first wave without a hitch. Call it once the page is idle, with the options you'll play with.
+ * Does the slow part of waves ahead of time (drawing and decoding the filter's maps, compiling the
+ * shaders), for a first wave without a delay. Call it once the page is idle, with the options you'll
+ * play with: it prepares those, then (in later idle time) the ring and the band in the same scope, so
+ * waves from any origin there start right away.
  */
 export const prepareWaveTransition = (options: WaveTransitionOptions = {}): void => {
   if (!isWaveTransitionSupported()) {
     return;
   }
-  const plan = planWave(options);
-  waveMaps(plan.config, plan.reach);
-  createWaveEffects(plan.config, plan.box)?.remove();
+  prepareMaps(options);
+  prepareEffects();
+  whenIdle(() => prepareMaps({ ...options, shape: 'ring' }));
+  whenIdle(() => prepareMaps({ ...options, shape: 'band' }));
 };

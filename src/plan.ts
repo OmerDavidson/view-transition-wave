@@ -206,4 +206,25 @@ export const revealMasks = (frame: WaveFrame, config: WaveConfig, sideways: bool
   };
 };
 
+/**
+ * The backdrop behind a whole-page wave, split along the front like the masks: the new page's background
+ * inside it, the old one's outside. It shows where the wave draws the page in from the window's edges.
+ * In viewport px, which for the whole page is the scope's px.
+ */
+export const revealBackdrop = (
+  frame: WaveFrame,
+  config: WaveConfig,
+  sideways: boolean,
+  oldColor: string,
+  newColor: string,
+): string => {
+  if (!frame.launched || frame.radius <= 0) {
+    return `linear-gradient(${oldColor}, ${oldColor})`;
+  }
+  const inner = Math.max(0, (1 - config.seam / frame.radius) * 100);
+  const outer = (1 + config.seam / frame.radius) * 100;
+  const [radiusX, radiusY] = frontRadii(frame, sideways);
+  return `radial-gradient(${radiusX}px ${radiusY}px at ${frame.ox}px ${frame.oy}px, ${newColor} ${inner}%, ${oldColor} ${outer}%)`;
+};
+
 export const INITIAL_MASKS: RevealMasks = { revealed: HIDDEN, remaining: SHOWN };
