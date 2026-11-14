@@ -89,10 +89,10 @@ Other exports are `prepareWaveTransition(options)`, `isWaveTransitionSupported()
 ## How it works
 
 1. `document.startViewTransition` snapshots the scope before and after your update. While the wave plays, the scope carries the `view-transition-name` `view-transition-wave`.
-2. Both snapshots are drawn through one SVG filter. It applies the inhale's pull toward the origin, a lens bulge along the front with red and blue bent by different amounts, and a blur that follows the front. The filter's displacement maps are drawn once on a canvas, for a range of front sizes, and stretched per frame.
-3. A mask redrawn every frame shows the new snapshot inside the front and the old one outside it, through a soft seam.
+2. A mask redrawn every frame shows the new snapshot inside the front and the old one outside it, through a soft seam.
+3. The transition's group, holding both masked snapshots, is drawn through one SVG filter. It applies the inhale's pull toward the origin, a lens bulge along the front with red and blue bent by different amounts, and a blur that follows the front. The filter's displacement maps are drawn once on a canvas, for a range of front sizes, and stretched per frame. Each frame runs only the stages that move a pixel by a visible amount, and no filter at all when nothing bends.
 4. A transparent WebGL2 canvas, which is a layer of the transition itself, draws the coloured band, the edge glow and the sparks. It uses distortion-wave's light shader.
-5. Every frame comes from distortion-wave's pure `frameState(t)`, so the two libraries play the same wave.
+5. Every frame comes from distortion-wave's pure `frameState(t)`, so the two libraries play the same wave. The per-frame masks and filter are set on the transition's pseudo-elements through held Web Animations, so only those pseudo-elements are restyled, never the page.
 
 ## Browser support
 

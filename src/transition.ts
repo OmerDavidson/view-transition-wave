@@ -2,8 +2,8 @@ import { makeParticles, particleAt, frameState } from 'distortion-wave/src/core.
 import { createWaveEffects } from './effects';
 import { mountWaveFilter } from './filter';
 import { waveMaps } from './maps';
-import { INITIAL_MASKS, planWave, revealMasks, type RevealMasks } from './plan';
-import { PLAYING_CLASS, REMAIN_PROPERTY, REVEAL_PROPERTY, WAVE_TRANSITION_NAME, ensureStyles } from './styles';
+import { INITIAL_MASKS, planWave, revealMasks } from './plan';
+import { PLAYING_CLASS, WAVE_TRANSITION_NAME, ensureStyles } from './styles';
 import type { WaveTransition, WaveTransitionOptions } from './types';
 
 /** How long the browser gets to take its snapshots before the wave is skipped. */
@@ -42,6 +42,34 @@ const startViewTransition = (update: UpdateCallback, types: readonly string[] | 
     return document.startViewTransition({ update, types: [...types] });
   }
   return document.startViewTransition(update);
+};
+
+/**
+ * Sets styles on one of the transition's pseudo-elements, frame after frame, through an animation that
+ * holds them for as long as the wave covers the page. Only that pseudo-element is restyled: a custom
+ * property on `<html>` would be inherited by, and restyle, the whole document every frame.
+ */
+const pseudoStyle = (pseudoElement: string) => {
+  let effect: KeyframeEffect | null = null;
+  let animation: Animation | undefined;
+  let last = '';
+  return {
+    /** Starts holding `keyframe`, until `duration` ms from now (when the transition may end). */
+    hold: (keyframe: Keyframe, duration: number) => {
+      last = JSON.stringify(keyframe);
+      animation = document.documentElement.animate([keyframe, keyframe], { pseudoElement, duration, fill: 'forwards' });
+      const held = animation?.effect as KeyframeEffect | null | undefined;
+      effect = typeof held?.setKeyframes === 'function' ? held : null;
+    },
+    set: (keyframe: Keyframe) => {
+      const key = JSON.stringify(keyframe);
+      if (effect && key !== last) {
+        last = key;
+        effect.setKeyframes([keyframe, keyframe]);
+      }
+    },
+    remove: () => animation?.cancel(),
+  };
 };
 
 /**
@@ -149,18 +177,21 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
   const html = document.documentElement;
   const named = scope as HTMLElement;
   ensureStyles();
-  const filter = mountWaveFilter(config, waveMaps(config, plan.reach), { width: box.width, height: box.height, sideways });
+  const groupStyle = pseudoStyle(`::view-transition-group(${WAVE_TRANSITION_NAME})`);
+  const newStyle = pseudoStyle(`::view-transition-new(${WAVE_TRANSITION_NAME})`);
+  const oldStyle = pseudoStyle(`::view-transition-old(${WAVE_TRANSITION_NAME})`);
+  const filter = mountWaveFilter(
+    config,
+    waveMaps(config, plan.reach),
+    { width: box.width, height: box.height, sideways },
+    value => groupStyle.set({ filter: value }),
+  );
   const effects = createWaveEffects(config, box);
   const particles = makeParticles(config.particles, config);
   const dots = new Float32Array(Math.max(particles.length, 1) * 4);
   const inlineName = named.style.viewTransitionName;
   const restoreNames = flattenNamedElements(scope, root);
   named.style.viewTransitionName = WAVE_TRANSITION_NAME;
-  const setMasks = (masks: RevealMasks) => {
-    html.style.setProperty(REVEAL_PROPERTY, masks.revealed);
-    html.style.setProperty(REMAIN_PROPERTY, masks.remaining);
-  };
-  setMasks(INITIAL_MASKS);
   html.classList.add(PLAYING_CLASS);
 
   let start = 0;
@@ -174,8 +205,7 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
     }
     pageBack = true;
     html.classList.remove(PLAYING_CLASS);
-    html.style.removeProperty(REVEAL_PROPERTY);
-    html.style.removeProperty(REMAIN_PROPERTY);
+    [groupStyle, newStyle, oldStyle].forEach(style => style.remove());
     named.style.viewTransitionName = inlineName;
     restoreNames();
     filter.remove();
@@ -200,7 +230,9 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
     const state = frameState(time, config, geometry);
     if (!pageBack) {
       filter.update(state);
-      setMasks(revealMasks(state, config, sideways));
+      const masks = revealMasks(state, config, sideways);
+      newStyle.set({ maskImage: masks.revealed });
+      oldStyle.set({ maskImage: masks.remaining });
     } else if (effects && !root) {
       // The page can scroll again: keep the light on the scope.
       const rect = scope.getBoundingClientRect();
@@ -211,7 +243,11 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
       particles.forEach((particle) => {
         const dot = particleAt(particle, state, config);
         if (dot && dot.a > 0.002) {
-          dots.set([dot.x, dot.y, particle.size, Math.min(dot.a, 1)], count * 4);
+          const at = count * 4;
+          dots[at] = dot.x;
+          dots[at + 1] = dot.y;
+          dots[at + 2] = particle.size;
+          dots[at + 3] = Math.min(dot.a, 1);
           count += 1;
         }
       });
@@ -250,6 +286,9 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
         { opacity: [1, 1] },
         { duration: settledAt * 1000, pseudoElement: `::view-transition-new(${WAVE_TRANSITION_NAME})` },
       );
+      groupStyle.hold({ filter: 'none' }, settledAt * 1000);
+      newStyle.hold({ maskImage: INITIAL_MASKS.revealed }, settledAt * 1000);
+      oldStyle.hold({ maskImage: INITIAL_MASKS.remaining }, settledAt * 1000);
       start = performance.now();
       ready.resolve();
       frame = requestAnimationFrame(tick);
