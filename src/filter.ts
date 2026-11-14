@@ -1,6 +1,7 @@
 import type { WaveConfig, WaveFrame } from 'distortion-wave/src/core.js';
 import { nearestLens, type WaveMaps } from './maps';
 import { OVERFLOW_MARGIN as FILTER_MARGIN, frontRadii } from './plan';
+import { NO_BEND, NO_BLUR, NO_SPLIT } from './quality';
 
 /**
  * The SVG filter the two snapshots are drawn through, together (see styles.ts): what
@@ -15,7 +16,8 @@ const MIN_SHIFT = 0.25;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 export interface WaveFilter {
-  update: (frame: WaveFrame) => void;
+  /** Draws `frame`, leaving out what `level` (see quality.ts) sheds. */
+  update: (frame: WaveFrame, level: number) => void;
   remove: () => void;
 }
 
@@ -160,18 +162,18 @@ export const mountWaveFilter = (
       }
     });
   return {
-    update: frame => {
+    update: (frame, level) => {
       // The shader samples `p + suck`; feDisplacementMap moves by scale × (channel − ½).
       const pullScale = 2 * frame.pull;
       // The shader samples `p - bulge`, the bulge being `energy × amplitude` at the front.
       const bulge = -2 * frame.energy * config.amplitude;
       const deviation = frame.energy * config.blur * 0.6;
-      // Every stage is a pass over the whole snapshot, twice (old and new): only the ones that move a
-      // pixel by a visible amount run. With none, the snapshots aren't filtered at all.
-      const pulling = Math.abs(pullScale) * 0.5 >= MIN_SHIFT;
-      const bending = Math.abs(bulge) * 0.5 >= MIN_SHIFT;
-      const splitting = bending && Math.abs(bulge) * split * 0.5 >= MIN_SHIFT;
-      const blurring = bending && deviation >= MIN_SHIFT;
+      // Every stage is a pass over the whole scope: only the ones that move a pixel by a visible amount,
+      // and that the quality level keeps, run. With none, the snapshots aren't filtered at all.
+      const pulling = level < NO_BEND && Math.abs(pullScale) * 0.5 >= MIN_SHIFT;
+      const bending = level < NO_BEND && Math.abs(bulge) * 0.5 >= MIN_SHIFT;
+      const splitting = level < NO_SPLIT && bending && Math.abs(bulge) * split * 0.5 >= MIN_SHIFT;
+      const blurring = level < NO_BLUR && bending && deviation >= MIN_SHIFT;
       const next = `${pulling}${bending}${splitting}${blurring}`;
       if (next !== wiring) {
         wiring = next;

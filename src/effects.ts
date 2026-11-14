@@ -115,6 +115,8 @@ export interface WaveEffects {
   canvas: HTMLCanvasElement;
   /** Draws one frame; `dots` holds x, y, size, alpha per spark. */
   render: (frame: WaveFrame, dots: Float32Array, dotCount: number) => void;
+  /** Draws at this fraction of the full resolution from the next frame (the light is soft). */
+  setResolution: (fraction: number) => void;
   /** Moves the canvas over the scope again (after a scroll). */
   place: (left: number, top: number) => void;
   remove: () => void;
@@ -166,10 +168,14 @@ export const createWaveEffects = (config: WaveConfig, box: ScopeBox): WaveEffect
   if (!gl) {
     return null;
   }
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const fullDpr = Math.min(window.devicePixelRatio || 1, 2);
+  let dpr = fullDpr;
   const { width, height } = box;
-  canvas.width = Math.round(width * dpr);
-  canvas.height = Math.round(height * dpr);
+  const resize = () => {
+    canvas.width = Math.max(1, Math.round(width * dpr));
+    canvas.height = Math.max(1, Math.round(height * dpr));
+  };
+  resize();
   canvas.setAttribute('aria-hidden', 'true');
   Object.assign(canvas.style, {
     position: 'fixed',
@@ -260,6 +266,10 @@ export const createWaveEffects = (config: WaveConfig, box: ScopeBox): WaveEffect
   return {
     canvas,
     render,
+    setResolution: (fraction) => {
+      dpr = fullDpr * fraction;
+      resize();
+    },
     place: (left, top) => {
       canvas.style.left = `${left}px`;
       canvas.style.top = `${top}px`;

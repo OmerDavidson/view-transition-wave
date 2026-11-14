@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { frontRadii, planWave, revealMasks } from '../src/plan';
 import { PLAYING_CLASS, WAVE_TRANSITION_NAME } from '../src/styles';
+import { NO_BEND, levelsToShed } from '../src/quality';
 import { isWaveTransitionSupported, waveTransition } from '../src/transition';
 
 const rect = (left: number, top: number, width: number, height: number): DOMRect =>
@@ -90,6 +91,20 @@ describe('revealMasks', () => {
     expect(masks.revealed).toContain(`${200 / 1.4}px 200px at 114px 124px, #000`);
     expect(masks.remaining).toContain(`${200 / 1.4}px 200px at 114px 124px, transparent`);
     expect(frontRadii(launched, true)).toEqual([200, 200 / 1.4]);
+  });
+});
+
+describe('levelsToShed', () => {
+  it('keeps everything at 25 fps or more, and ignores a single hitch', () => {
+    expect(levelsToShed([16.7, 16.7, 16.7, 16.7])).toBe(0);
+    expect(levelsToShed([33.3, 33.3, 40, 33.3])).toBe(0);
+    expect(levelsToShed([180, 16.7, 16.7, 16.7])).toBe(0);
+  });
+
+  it('sheds more levels the slower the frames come', () => {
+    expect(levelsToShed([50, 50, 50, 50])).toBe(1);
+    expect(levelsToShed([90, 90, 90])).toBe(2);
+    expect(levelsToShed([400, 400, 400])).toBe(NO_BEND);
   });
 });
 

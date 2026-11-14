@@ -3,6 +3,18 @@ import { createWaveEffects } from './effects';
 import { mountWaveFilter } from './filter';
 import { waveMaps } from './maps';
 import { INITIAL_MASKS, planWave, revealMasks } from './plan';
+import {
+  FRAME_GAP,
+  FRAME_SPARE,
+  FRAME_WINDOW,
+  FULL,
+  HALF_LIGHT,
+  LOWEST,
+  SPARE_WAVES,
+  WARM_UP_FRAMES,
+  WINDOW_TIME,
+  levelsToShed,
+} from './quality';
 import { PLAYING_CLASS, WAVE_TRANSITION_NAME, ensureStyles } from './styles';
 import type { WaveTransition, WaveTransitionOptions } from './types';
 
@@ -30,6 +42,10 @@ const deferred = (): Deferred => {
 export type UpdateCallback = () => void | Promise<void>;
 
 let active: WaveTransition | null = null;
+/** The quality level (see quality.ts) the next `'auto'` wave starts at: where the last one ended. */
+let startLevel = FULL;
+/** `'auto'` waves in a row that played at `startLevel` with frames to spare. */
+let spareWaves = 0;
 
 /** True when the browser can play the wave (it needs view transitions; without WebGL2 it plays without light). */
 export const isWaveTransitionSupported = (): boolean =>
@@ -194,6 +210,43 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
   named.style.viewTransitionName = WAVE_TRANSITION_NAME;
   html.classList.add(PLAYING_CLASS);
 
+  const adaptive = (options.quality ?? 'auto') === 'auto';
+  const firstLevel = adaptive ? startLevel : FULL;
+  let level = firstLevel;
+  const setLevel = (next: number) => {
+    level = next;
+    effects?.setResolution(level >= HALF_LIGHT ? 0.5 : 1);
+  };
+  setLevel(level);
+  // Frame times: of the current window (to shed a level), and of the wave while it covers the page (to
+  // try a higher level later; the light alone, after, is cheap).
+  let previous = 0;
+  let seen = 0;
+  const windowTimes: number[] = [];
+  let waveTime = 0;
+  let waveFrames = 0;
+  const measure = (now: number) => {
+    const gap = now - previous;
+    previous = now;
+    seen += 1;
+    if (seen <= WARM_UP_FRAMES + 1 || gap > FRAME_GAP) {
+      return;
+    }
+    if (!pageBack) {
+      waveTime += gap;
+      waveFrames += 1;
+    }
+    windowTimes.push(gap);
+    const windowTime = windowTimes.reduce((sum, time) => sum + time, 0);
+    if (windowTimes.length >= FRAME_WINDOW || (windowTimes.length >= 3 && windowTime >= WINDOW_TIME)) {
+      const shed = adaptive ? levelsToShed(windowTimes) : 0;
+      if (shed > 0 && level < LOWEST) {
+        setLevel(Math.min(LOWEST, level + shed));
+      }
+      windowTimes.length = 0;
+    }
+  };
+
   let start = 0;
   let frame = 0;
   let pageBack = false;
@@ -221,15 +274,25 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
     }
     lightGone = true;
     cancelAnimationFrame(frame);
+    if (adaptive && waveFrames >= 2 * FRAME_WINDOW) {
+      const spare = level === firstLevel && waveTime / waveFrames < FRAME_SPARE;
+      spareWaves = spare ? spareWaves + 1 : 0;
+      startLevel = level;
+      if (spareWaves >= SPARE_WAVES) {
+        startLevel = Math.max(FULL, level - 1);
+        spareWaves = 0;
+      }
+    }
     effects?.remove();
     done();
   };
 
   const tick = (now: number) => {
+    measure(now);
     const time = Math.min((now - start) / 1000, total);
     const state = frameState(time, config, geometry);
     if (!pageBack) {
-      filter.update(state);
+      filter.update(state, level);
       const masks = revealMasks(state, config, sideways);
       newStyle.set({ maskImage: masks.revealed });
       oldStyle.set({ maskImage: masks.remaining });

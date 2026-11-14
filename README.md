@@ -71,6 +71,7 @@ requestIdleCallback(() => prepareWaveTransition({ origin: themeSwitch }));
 | `easing` | distortion-wave's launch | How the front travels: a CSS keyword, `'cubic-bezier(…)'`, `[x1, y1, x2, y2]` or a function. |
 | `intensity` | `1` | Strength of the bending. `0` keeps only the light. |
 | `particles` | `true` | `false`, or a count. |
+| `quality` | `'auto'` | `'auto'` aims for 25 fps or more: when frames come slower, it drops its costliest parts while it plays (the colour split, then the blur, then the bending, then the glow's resolution). `'full'` always plays everything. |
 | `reducedMotion` | `'respect'` | With `prefers-reduced-motion`, `'respect'` plays the browser's plain cross-fade instead. `'ignore'` always plays the wave. |
 | `types` | | View transition types, for `:active-view-transition-type()`. |
 | `signal` | | An `AbortSignal`. Aborting skips the transition, and the update still runs. |
@@ -81,6 +82,7 @@ Other exports are `prepareWaveTransition(options)`, `isWaveTransitionSupported()
 ## Behaviour
 
 - **Your update always runs.** Without view transitions, it runs with no animation, and `ready` rejects (as it does when a view transition is skipped). Without WebGL2, the page still bends but has no light.
+- **It aims for 25 fps.** With `quality: 'auto'`, the wave times its own frames. If they come slower than 25 fps, it sheds the costliest part still playing, several at once when frames are far over budget. The next wave starts at the level this one ended at, and tries one level higher after three waves in a row with frames to spare.
 - **One at a time.** A new wave skips the one still playing, as a new view transition does.
 - **Named elements are flattened.** While a wave plays, elements inside the scope that have their own `view-transition-name` are un-named. Otherwise the browser would draw them above the bent snapshot, untouched. Their names come back afterwards.
 - **Other view transitions are left alone.** The wave's styles only apply while it plays.
