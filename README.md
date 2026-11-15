@@ -101,7 +101,11 @@ Other exports are `prepareWaveTransition(options)`, `isWaveTransitionSupported()
 
 ## Browser support
 
-This needs same-document view transitions (Chrome and Edge 111+, Safari 18+). It is tested in Chromium only. Other browsers fall back to a plain update if they lack view transitions, but their SVG filters on view-transition pseudo-elements are untested.
+This needs same-document view transitions (Chrome and Edge 111+, Firefox 144+, Safari 18+). Browsers without them run the update with no animation.
+
+- **Chrome and Edge** play the whole wave.
+- **Firefox** plays the wave without the bending: the reveal, the coloured light and the sparks. Firefox draws a view transition's snapshots on the GPU only, and through a filter with a displacement map or an image (which the bending needs) a snapshot draws nothing, so the screen would go blank.
+- **Safari** is untested.
 
 Limits: the front can't lean toward the touch point the way distortion-wave's does, because a snapshot's lens can only stretch along the window's axes. The blur is a single Gaussian rather than a pyramid.
 

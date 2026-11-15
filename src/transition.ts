@@ -51,6 +51,14 @@ let spareWaves = 0;
 export const isWaveTransitionSupported = (): boolean =>
   typeof document !== 'undefined' && typeof document.startViewTransition === 'function';
 
+/**
+ * Whether the page's snapshots can be drawn through the bending filter. Gecko (Firefox) draws a view
+ * transition's snapshots on the GPU only: through a filter with a displacement map or an image (both
+ * of which the bending needs) a snapshot draws nothing, and the screen goes blank. There the wave plays
+ * without the bending: the reveal, the light and the sparks. `-moz-orient` is a Gecko-only property.
+ */
+const canBendSnapshots = (): boolean => !(typeof CSS !== 'undefined' && CSS.supports?.('-moz-orient', 'inline'));
+
 const prefersReducedMotion = (): boolean => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 
 const startViewTransition = (update: UpdateCallback, types: readonly string[] | undefined): ViewTransition => {
@@ -213,14 +221,17 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
   const backdropStyle = pseudoStyle('::view-transition');
   const oldBackground = root ? pageBackground() : '';
   let newBackground = oldBackground;
-  const maps = waveMaps(config, plan.reach);
-  const mapsDecoded = decodeMaps(maps);
-  const filter = mountWaveFilter(
-    config,
-    maps,
-    { width: box.width, height: box.height, sideways },
-    value => groupStyle.set({ filter: value }),
-  );
+  const bends = canBendSnapshots();
+  const maps = bends ? waveMaps(config, plan.reach) : null;
+  const mapsDecoded = maps ? decodeMaps(maps) : Promise.resolve();
+  const filter = maps
+    ? mountWaveFilter(
+        config,
+        maps,
+        { width: box.width, height: box.height, sideways },
+        value => groupStyle.set({ filter: value }),
+      )
+    : null;
   const effects = createWaveEffects(config, box);
   const particles = makeParticles(config.particles, config);
   const dots = new Float32Array(Math.max(particles.length, 1) * 4);
@@ -280,7 +291,7 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
     [groupStyle, newStyle, oldStyle, backdropStyle].forEach(style => style.remove());
     named.style.viewTransitionName = inlineName;
     restoreNames();
-    filter.remove();
+    filter?.remove();
     // The light keeps fading over the live page.
     effects?.leaveTransition();
     interactive.resolve();
@@ -309,7 +320,7 @@ export const waveTransition = (update: UpdateCallback = () => undefined, options
     const time = Math.min((now - start) / 1000, total);
     const state = frameState(time, config, geometry);
     if (!pageBack) {
-      filter.update(state, level);
+      filter?.update(state, level);
       const masks = revealMasks(state, config, sideways);
       newStyle.set({ maskImage: masks.revealed });
       oldStyle.set({ maskImage: masks.remaining });
@@ -418,8 +429,11 @@ export const prepareWaveTransition = (options: WaveTransitionOptions = {}): void
   if (!isWaveTransitionSupported()) {
     return;
   }
-  prepareMaps(options);
   prepareEffects();
+  if (!canBendSnapshots()) {
+    return;
+  }
+  prepareMaps(options);
   whenIdle(() => prepareMaps({ ...options, shape: 'ring' }));
   whenIdle(() => prepareMaps({ ...options, shape: 'band' }));
 };
