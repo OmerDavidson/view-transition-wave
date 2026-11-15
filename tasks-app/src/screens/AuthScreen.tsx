@@ -1,119 +1,114 @@
-import { useState, type FormEvent } from 'react';
-import { MIN_PASSWORD_LENGTH, USERNAME_PATTERN } from '../../shared/task';
+import { useEffect, useRef, useState } from 'react';
+import { GOOGLE_CLIENT_ID_PLACEHOLDER, type User } from '../../shared/task';
 import { ApiError, api } from '../data/api';
+import { loadGoogleIdentity } from '../data/google';
 import { Logo } from '../components/Icons';
 
 interface Props {
   /** Set when the session expired: the user signs back in to the same account. */
-  username?: string;
-  onSignedIn: (username: string) => void;
+  expectedUser?: User;
+  onSignedIn: (user: User) => void;
   onDismiss?: () => void;
 }
 
-export function AuthScreen({ username: fixedUsername, onSignedIn, onDismiss }: Props) {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [username, setUsername] = useState(fixedUsername ?? '');
-  const [password, setPassword] = useState('');
-  const [confirmation, setConfirmation] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const reauth = fixedUsername !== undefined;
+type Status = { kind: 'loading' } | { kind: 'ready' } | { kind: 'busy' } | { kind: 'error'; message: string };
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    const name = username.trim().toLowerCase();
-    if (!USERNAME_PATTERN.test(name)) return setError('Usernames are 3–32 characters: letters, numbers, dots, dashes and underscores.');
-    if (password.length < MIN_PASSWORD_LENGTH) return setError(`Passwords need at least ${MIN_PASSWORD_LENGTH} characters.`);
-    if (mode === 'register' && password !== confirmation) return setError("The passwords don't match.");
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await api<{ username: string }>(`/api/auth/${mode}`, { username: name, password });
-      onSignedIn(result.username);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Can't reach the server. Signing in needs a connection the first time.");
-    } finally {
-      setBusy(false);
-    }
-  };
+const OFFLINE = "Can't reach the server. Signing in needs a connection the first time.";
+
+export function AuthScreen({ expectedUser, onSignedIn, onDismiss }: Props) {
+  const [status, setStatus] = useState<Status>({ kind: 'loading' });
+  const [attempt, setAttempt] = useState(0);
+  const buttonSlot = useRef<HTMLDivElement>(null);
+  // Google keeps the callback from initialize(); read the latest props through a ref.
+  const latest = useRef({ expectedUser, onSignedIn });
+  useEffect(() => {
+    latest.current = { expectedUser, onSignedIn };
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const onCredential = async ({ credential }: { credential: string }) => {
+      setStatus({ kind: 'busy' });
+      try {
+        const user = await api<User>('/api/auth/google', { credential });
+        const expected = latest.current.expectedUser;
+        if (expected && user.id !== expected.id) {
+          // This device holds another account's tasks: don't mix them.
+          await api('/api/auth/logout', {}).catch(() => undefined);
+          setStatus({ kind: 'error', message: `This device is signed in as ${expected.email || expected.name}. Sign in with that account, or sign out first.` });
+          return;
+        }
+        latest.current.onSignedIn(user);
+      } catch (error) {
+        setStatus({ kind: 'error', message: error instanceof ApiError ? error.message : OFFLINE });
+      }
+    };
+
+    (async () => {
+      setStatus({ kind: 'loading' });
+      let clientId: string;
+      try {
+        clientId = (await api<{ googleClientId: string }>('/api/config')).googleClientId;
+      } catch {
+        if (!cancelled) setStatus({ kind: 'error', message: OFFLINE });
+        return;
+      }
+      if (clientId === GOOGLE_CLIENT_ID_PLACEHOLDER) {
+        if (!cancelled) setStatus({ kind: 'error', message: 'Google sign-in isn’t set up yet: put your OAuth client ID in GOOGLE_CLIENT_ID in wrangler.jsonc.' });
+        return;
+      }
+      try {
+        const google = await loadGoogleIdentity();
+        if (cancelled || !buttonSlot.current) return;
+        google.initialize({ client_id: clientId, callback: (r) => void onCredential(r), ux_mode: 'popup', auto_select: true, itp_support: true, use_fedcm_for_button: true });
+        const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        buttonSlot.current.replaceChildren();
+        google.renderButton(buttonSlot.current, { theme: dark ? 'filled_black' : 'outline', size: 'large', text: 'continue_with', shape: 'pill', width: 300, logo_alignment: 'center' });
+        setStatus({ kind: 'ready' });
+      } catch {
+        if (!cancelled) setStatus({ kind: 'error', message: "Couldn't load Google sign-in. Check your connection or content blocker." });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt]);
+
+  const reauth = expectedUser !== undefined;
 
   return (
     <main className={reauth ? 'auth auth-dialog' : 'auth'} role={reauth ? 'dialog' : undefined} aria-labelledby="auth-title">
-      <form className="auth-card" onSubmit={submit} noValidate>
+      <div className="auth-card">
         <Logo className="auth-logo" />
-        <h1 id="auth-title">{reauth ? 'Sign in to sync' : mode === 'login' ? 'Welcome back' : 'Create your account'}</h1>
+        <h1 id="auth-title">{reauth ? 'Sign in to sync' : 'Welcome to Tasks'}</h1>
         <p className="muted">
           {reauth
-            ? 'Your session expired. Your tasks are safe on this device and sync once you sign in.'
-            : 'Your tasks live on this device and sync to your own private store.'}
+            ? `Your session expired. Your tasks are safe on this device and sync once you sign in as ${expectedUser.email || expectedUser.name}.`
+            : 'Plan your week. Your tasks live on this device and sync to your own private store.'}
         </p>
 
-        {!reauth && (
-          <div className="segmented auth-tabs" role="tablist">
-            {(['login', 'register'] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                role="tab"
-                aria-selected={mode === m}
-                onClick={() => {
-                  setMode(m);
-                  setError(null);
-                }}
-              >
-                {m === 'login' ? 'Sign in' : 'Sign up'}
-              </button>
-            ))}
-          </div>
+        <div className="google-button" ref={buttonSlot} aria-busy={status.kind === 'loading' || status.kind === 'busy'} hidden={status.kind === 'error'} />
+        {status.kind === 'loading' && <p className="muted auth-note">Loading sign-in…</p>}
+        {status.kind === 'busy' && <p className="muted auth-note">Signing you in…</p>}
+        {status.kind === 'error' && (
+          <>
+            <p className="form-error" role="alert">
+              {status.message}
+            </p>
+            <button className="button subtle block" type="button" onClick={() => setAttempt((n) => n + 1)}>
+              Try again
+            </button>
+          </>
         )}
 
-        <label className="field">
-          <span>Username</span>
-          <input
-            name="username"
-            autoComplete="username"
-            autoCapitalize="none"
-            spellCheck={false}
-            value={username}
-            readOnly={reauth}
-            onChange={(e) => setUsername(e.target.value)}
-            required
-          />
-        </label>
-        <label className="field">
-          <span>Password</span>
-          <input
-            name="password"
-            type="password"
-            autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            minLength={MIN_PASSWORD_LENGTH}
-            required
-          />
-        </label>
-        {mode === 'register' && (
-          <label className="field">
-            <span>Confirm password</span>
-            <input name="confirm" type="password" autoComplete="new-password" value={confirmation} onChange={(e) => setConfirmation(e.target.value)} required />
-          </label>
-        )}
-
-        {error && (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
-        )}
-
-        <button className="button primary block" type="submit" disabled={busy}>
-          {busy ? 'One moment…' : mode === 'login' ? 'Sign in' : 'Create account'}
-        </button>
         {onDismiss && (
           <button className="button ghost block" type="button" onClick={onDismiss}>
             Not now
           </button>
         )}
-      </form>
+      </div>
     </main>
   );
 }

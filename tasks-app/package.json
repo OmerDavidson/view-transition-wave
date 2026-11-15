@@ -10,7 +10,7 @@
     "deploy": "npm run build && wrangler deploy",
     "lint": "oxlint",
     "typecheck": "tsc -b",
-    "types": "wrangler types worker/worker-configuration.d.ts",
+    "types": "wrangler types --strict-vars=false worker/worker-configuration.d.ts",
     "test": "vitest run"
   },
   "dependencies": {

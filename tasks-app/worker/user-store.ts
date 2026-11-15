@@ -1,15 +1,12 @@
 import { DurableObject } from 'cloudflare:workers';
 import { parseTask, type SyncResponse, type Task } from '../shared/task';
-import { hashPassword, PBKDF2_ITERATIONS, randomBytes, safeEqual, sha256, toBase64Url, fromBase64Url } from './crypto';
+import { randomBytes, sha256, toBase64Url } from './crypto';
+import type { GoogleProfile } from './google';
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const MAX_FAILED_LOGINS = 8;
-const LOCKOUT_MS = 15 * 60 * 1000;
 /** An edit stamped further in the future than this is clamped, so one device with a wrong clock can't win forever. */
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 export const MAX_CHANGES_PER_SYNC = 500;
-
-export type AuthResult = { ok: true; sessionSecret: string } | { ok: false; error: string; status: number };
 
 interface TaskRow extends Record<string, SqlStorageValue> {
   id: string;
@@ -27,13 +24,12 @@ interface TaskRow extends Record<string, SqlStorageValue> {
 const MIGRATIONS = [
   `CREATE TABLE account (
      id INTEGER PRIMARY KEY CHECK (id = 1),
-     username TEXT NOT NULL,
-     password_hash TEXT NOT NULL,
-     salt TEXT NOT NULL,
-     iterations INTEGER NOT NULL,
+     google_sub TEXT NOT NULL,
+     email TEXT NOT NULL,
+     name TEXT NOT NULL,
+     picture TEXT,
      created_at INTEGER NOT NULL,
-     failed_logins INTEGER NOT NULL DEFAULT 0,
-     locked_until INTEGER NOT NULL DEFAULT 0
+     last_sign_in INTEGER NOT NULL
    );
    CREATE TABLE sessions (
      token_hash TEXT PRIMARY KEY,
@@ -70,7 +66,7 @@ function rowToTask(row: TaskRow): Task {
 }
 
 /**
- * One instance per user, named after the username. It holds the account, its sessions and its tasks,
+ * One instance per user, named after their Google account ID. It holds the account, its sessions and its tasks,
  * all in this object's own SQLite database.
  */
 export class UserStore extends DurableObject<Env> {
@@ -95,10 +91,6 @@ export class UserStore extends DurableObject<Env> {
     }
   }
 
-  private hasAccount(): boolean {
-    return this.sql.exec('SELECT 1 FROM account').toArray().length > 0;
-  }
-
   private async newSession(): Promise<string> {
     const secret = toBase64Url(randomBytes(32));
     const now = Date.now();
@@ -107,60 +99,35 @@ export class UserStore extends DurableObject<Env> {
     return secret;
   }
 
-  async register(username: string, password: string): Promise<AuthResult> {
-    if (this.hasAccount()) return { ok: false, status: 409, error: 'That username is taken.' };
-    const salt = randomBytes(16);
-    const hash = await hashPassword(password, salt);
-    // Re-check after the await: two sign-ups for the same name may have raced.
-    if (this.hasAccount()) return { ok: false, status: 409, error: 'That username is taken.' };
-    this.sql.exec(
-      'INSERT INTO account (id, username, password_hash, salt, iterations, created_at) VALUES (1, ?, ?, ?, ?, ?)',
-      username,
-      hash,
-      toBase64Url(salt),
-      PBKDF2_ITERATIONS,
-      Date.now(),
-    );
-    return { ok: true, sessionSecret: await this.newSession() };
-  }
-
-  async login(password: string): Promise<AuthResult> {
-    const invalid: AuthResult = { ok: false, status: 401, error: 'Wrong username or password.' };
-    const account = this.sql
-      .exec<{ password_hash: string; salt: string; iterations: number; failed_logins: number; locked_until: number }>(
-        'SELECT password_hash, salt, iterations, failed_logins, locked_until FROM account',
-      )
-      .toArray()[0];
-    if (!account) {
-      // Spend the same time as a real check, so response times don't reveal which usernames exist.
-      await hashPassword(password, randomBytes(16));
-      return invalid;
-    }
+  /**
+   * Called with a profile from an ID token the Worker has already verified. Creates the account on first
+   * sign-in, refreshes the name, email and picture after that, and returns a new session secret.
+   */
+  async signIn(profile: GoogleProfile): Promise<string> {
     const now = Date.now();
-    if (account.locked_until > now) {
-      return { ok: false, status: 429, error: 'Too many attempts. Try again in a few minutes.' };
-    }
-    const hash = await hashPassword(password, fromBase64Url(account.salt), account.iterations);
-    if (!safeEqual(hash, account.password_hash)) {
-      const failed = account.failed_logins + 1;
-      const lock = failed >= MAX_FAILED_LOGINS;
-      this.sql.exec('UPDATE account SET failed_logins = ?, locked_until = ?', lock ? 0 : failed, lock ? now + LOCKOUT_MS : 0);
-      return invalid;
-    }
-    this.sql.exec('UPDATE account SET failed_logins = 0, locked_until = 0');
-    return { ok: true, sessionSecret: await this.newSession() };
+    this.sql.exec(
+      `INSERT INTO account (id, google_sub, email, name, picture, created_at, last_sign_in) VALUES (1, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (id) DO UPDATE SET email = excluded.email, name = excluded.name, picture = excluded.picture, last_sign_in = excluded.last_sign_in`,
+      profile.sub,
+      profile.email,
+      profile.name,
+      profile.picture,
+      now,
+      now,
+    );
+    return this.newSession();
   }
 
-  /** Returns the username when the session is valid. */
-  async checkSession(secret: string): Promise<string | null> {
+  /** Returns the account when the session is valid. */
+  async checkSession(secret: string): Promise<GoogleProfile | null> {
     const row = this.sql
-      .exec<{ username: string }>(
-        'SELECT a.username FROM sessions s, account a WHERE s.token_hash = ? AND s.expires_at > ?',
+      .exec<{ google_sub: string; email: string; name: string; picture: string | null }>(
+        'SELECT a.google_sub, a.email, a.name, a.picture FROM sessions s, account a WHERE s.token_hash = ? AND s.expires_at > ?',
         await sha256(secret),
         Date.now(),
       )
       .toArray()[0];
-    return row?.username ?? null;
+    return row ? { sub: row.google_sub, email: row.email, name: row.name, picture: row.picture } : null;
   }
 
   async logout(secret: string): Promise<void> {

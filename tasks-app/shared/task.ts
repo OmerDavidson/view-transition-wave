@@ -34,8 +34,17 @@ export interface SyncResponse {
   changes: Task[];
 }
 
-export const USERNAME_PATTERN = /^[a-z0-9][a-z0-9_.-]{2,31}$/;
-export const MIN_PASSWORD_LENGTH = 8;
+/** The signed-in Google account, as the app shows it. */
+export interface User {
+  /** Google's account ID (`sub`). */
+  id: string;
+  email: string;
+  name: string;
+  picture: string | null;
+}
+
+/** The value in wrangler.jsonc until a real OAuth client ID replaces it. */
+export const GOOGLE_CLIENT_ID_PLACEHOLDER = 'YOUR_CLIENT_ID.apps.googleusercontent.com';
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;

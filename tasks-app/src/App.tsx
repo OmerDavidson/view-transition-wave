@@ -1,27 +1,30 @@
 import { createContext, use, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import type { User } from '../shared/task';
 import { AuthScreen } from './screens/AuthScreen';
 import { HomeScreen } from './screens/HomeScreen';
 import { TaskFormScreen } from './screens/TaskFormScreen';
 import { api } from './data/api';
+import { disableGoogleAutoSelect } from './data/google';
 import { LocalDatabase } from './data/idb';
 import { TaskStore, type Snapshot } from './data/store';
 import { useRoute } from './lib/router';
 
-const USER_KEY = 'tasks.user';
+const USER_KEY = 'tasks.account';
 /** Fired to show the sign-in dialog again after the user dismissed it. */
 export const REAUTH_EVENT = 'tasks:reauth';
 
-function readUser(): string | null {
+function readUser(): User | null {
   try {
-    return localStorage.getItem(USER_KEY);
+    const user = JSON.parse(localStorage.getItem(USER_KEY) ?? 'null') as User | null;
+    return user && typeof user.id === 'string' && typeof user.name === 'string' ? user : null;
   } catch {
     return null;
   }
 }
 
-function writeUser(username: string | null): void {
+function writeUser(user: User | null): void {
   try {
-    if (username) localStorage.setItem(USER_KEY, username);
+    if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
     else localStorage.removeItem(USER_KEY);
   } catch {
     // Private mode: the user signs in again next time.
@@ -29,6 +32,7 @@ function writeUser(username: string | null): void {
 }
 
 interface Session {
+  user: User;
   store: TaskStore;
   signOut: () => Promise<void>;
 }
@@ -48,12 +52,18 @@ export function useTasks(): Snapshot {
 
 export function App() {
   // Local first: the last signed-in user's tasks open straight from the device, online or not.
-  const [username, setUsername] = useState(readUser);
+  const [user, setUser] = useState(readUser);
   const [store, setStore] = useState<TaskStore | null>(null);
+  const userId = user?.id;
+
+  const signIn = (next: User) => {
+    writeUser(next);
+    setUser(next);
+  };
 
   useEffect(() => {
-    if (!username) return;
-    const next = new TaskStore(username);
+    if (!userId) return;
+    const next = new TaskStore(userId);
     let cancelled = false;
     next.open().then(
       () => !cancelled && setStore(next),
@@ -64,45 +74,37 @@ export function App() {
       next.close();
       setStore(null);
     };
-  }, [username]);
+  }, [userId]);
 
   const session = useMemo<Session | null>(() => {
-    if (!store) return null;
+    if (!store || !user) return null;
     const signOut = async () => {
       await store.sync();
       const { pending } = store.getSnapshot();
       if (pending > 0 && !confirm(`${pending} change${pending === 1 ? '' : 's'} haven't synced yet and will be lost. Sign out anyway?`)) return;
       await api('/api/auth/logout', {}).catch(() => undefined);
+      disableGoogleAutoSelect();
       store.close();
-      await LocalDatabase.destroy(store.username).catch(() => undefined);
+      await LocalDatabase.destroy(store.userId).catch(() => undefined);
       writeUser(null);
-      setUsername(null);
+      setUser(null);
     };
-    return { store, signOut };
-  }, [store]);
+    return { user, store, signOut };
+  }, [store, user]);
 
-  if (!username) {
-    return (
-      <AuthScreen
-        onSignedIn={(name) => {
-          writeUser(name);
-          setUsername(name);
-        }}
-      />
-    );
-  }
+  if (!user) return <AuthScreen onSignedIn={signIn} />;
   if (!session) return <div className="splash" aria-busy="true" />;
 
   return (
     <SessionContext value={session}>
-      <Screens />
+      <Screens onSignedIn={signIn} />
     </SessionContext>
   );
 }
 
-function Screens() {
+function Screens({ onSignedIn }: { onSignedIn: (user: User) => void }) {
   const route = useRoute();
-  const { store } = useSession();
+  const { user, store } = useSession();
   const { sync } = useTasks();
   // Ask to sign in again when the session expires, but let the user keep working offline-style if they'd rather.
   const [dismissed, setDismissed] = useState(false);
@@ -116,7 +118,14 @@ function Screens() {
       {route.name === 'home' ? <HomeScreen params={route.params} /> : <TaskFormScreen route={route} />}
       {sync.status === 'signed-out' && !dismissed && (
         <div className="modal-backdrop">
-          <AuthScreen username={store.username} onSignedIn={() => store.requestSync(0)} onDismiss={() => setDismissed(true)} />
+          <AuthScreen
+            expectedUser={user}
+            onSignedIn={(next) => {
+              onSignedIn(next); // picks up a new name or picture
+              store.requestSync(0);
+            }}
+            onDismiss={() => setDismissed(true)}
+          />
         </div>
       )}
     </>

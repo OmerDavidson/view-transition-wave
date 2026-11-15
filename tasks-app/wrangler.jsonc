@@ -4,6 +4,10 @@
   "main": "./worker/index.ts",
   "compatibility_date": "2026-11-01",
   "observability": { "enabled": true },
+  "vars": {
+    // Your OAuth 2.0 Web client ID from the Google Cloud Console (not a secret). See README.
+    "GOOGLE_CLIENT_ID": "YOUR_CLIENT_ID.apps.googleusercontent.com"
+  },
   "assets": {
     // The built PWA. Anything that isn't a file falls back to index.html,
     // and /api/* always goes to the Worker first.

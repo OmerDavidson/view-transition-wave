@@ -47,12 +47,12 @@ export class TaskStore {
   private readonly cleanups: (() => void)[] = [];
   private closed = false;
 
-  constructor(readonly username: string) {
-    this.channel = new BroadcastChannel(`tasks:${username}`);
+  constructor(readonly userId: string) {
+    this.channel = new BroadcastChannel(`tasks:${userId}`);
   }
 
   async open(): Promise<void> {
-    this.db = await LocalDatabase.open(this.username);
+    this.db = await LocalDatabase.open(this.userId);
     await this.reload();
     this.cursor = (await this.db.getMeta<number>('cursor')) ?? 0;
     this.snapshot = { ...this.snapshot, loaded: true };

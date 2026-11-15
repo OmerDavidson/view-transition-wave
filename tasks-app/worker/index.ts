@@ -1,4 +1,5 @@
-import { MIN_PASSWORD_LENGTH, USERNAME_PATTERN, type SyncRequest } from '../shared/task';
+import { GOOGLE_CLIENT_ID_PLACEHOLDER, type SyncRequest, type User } from '../shared/task';
+import { GOOGLE_JWKS_URL, googleKeys, SUB_PATTERN, verifyGoogleIdToken, type GoogleProfile } from './google';
 import { UserStore } from './user-store';
 
 export { UserStore };
@@ -19,22 +20,34 @@ function sessionCookie(value: string, url: URL, maxAge: number): string {
   return `${COOKIE}=${value}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`;
 }
 
-/** The cookie is `<username>.<secret>`: the username says which Durable Object to ask, the secret proves the session. */
-function readSession(request: Request): { username: string; secret: string } | null {
+/** The cookie is `<google id>.<secret>`: the ID says which Durable Object to ask, the secret proves the session. */
+function readSession(request: Request): { userId: string; secret: string } | null {
   const cookie = request.headers.get('Cookie') ?? '';
   const match = cookie.match(new RegExp(`(?:^|;\\s*)${COOKIE}=([^;]+)`));
   if (!match) return null;
   const value = decodeURIComponent(match[1]);
   const dot = value.lastIndexOf('.');
   if (dot < 0) return null;
-  const username = value.slice(0, dot);
+  const userId = value.slice(0, dot);
   const secret = value.slice(dot + 1);
-  if (!USERNAME_PATTERN.test(username) || !/^[A-Za-z0-9_-]{43}$/.test(secret)) return null;
-  return { username, secret };
+  if (!SUB_PATTERN.test(userId) || !/^[A-Za-z0-9_-]{43}$/.test(secret)) return null;
+  return { userId, secret };
 }
 
-function store(env: Env, username: string): DurableObjectStub<UserStore> {
-  return env.USER_STORE.get(env.USER_STORE.idFromName(username));
+/** Each Google account gets its own Durable Object. */
+function store(env: Env, userId: string): DurableObjectStub<UserStore> {
+  return env.USER_STORE.get(env.USER_STORE.idFromName(`google:${userId}`));
+}
+
+function toUser(profile: GoogleProfile): User {
+  return { id: profile.sub, email: profile.email, name: profile.name, picture: profile.picture };
+}
+
+/** Tests may point the Worker at their own keys, but only on localhost, so a deployed Worker always trusts Google's. */
+function keysUrl(env: Env, url: URL): string {
+  const override = (env as Env & { GOOGLE_JWKS_URL?: string }).GOOGLE_JWKS_URL;
+  const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  return override && local && /^http:\/\/(localhost|127\.0\.0\.1)[:/]/.test(override) ? override : GOOGLE_JWKS_URL;
 }
 
 async function readJson(request: Request): Promise<Record<string, unknown> | null> {
@@ -47,20 +60,14 @@ async function readJson(request: Request): Promise<Record<string, unknown> | nul
   }
 }
 
-async function handleAuth(request: Request, env: Env, url: URL, mode: 'login' | 'register'): Promise<Response> {
+async function handleGoogleSignIn(request: Request, env: Env, url: URL): Promise<Response> {
+  if (env.GOOGLE_CLIENT_ID === GOOGLE_CLIENT_ID_PLACEHOLDER) return error('Google sign-in is not configured yet.', 503);
   const body = await readJson(request);
-  const username = typeof body?.username === 'string' ? body.username.trim().toLowerCase() : '';
-  const password = typeof body?.password === 'string' ? body.password : '';
-  if (!USERNAME_PATTERN.test(username)) {
-    return error('Usernames are 3–32 characters: letters, numbers, dots, dashes and underscores.', 400);
-  }
-  if (password.length < MIN_PASSWORD_LENGTH || password.length > 256) {
-    return error(`Passwords need at least ${MIN_PASSWORD_LENGTH} characters.`, 400);
-  }
-  const stub = store(env, username);
-  const result = mode === 'register' ? await stub.register(username, password) : await stub.login(password);
-  if (!result.ok) return error(result.error, result.status);
-  return json({ username }, 200, { 'Set-Cookie': sessionCookie(`${username}.${result.sessionSecret}`, url, COOKIE_MAX_AGE) });
+  const credential = typeof body?.credential === 'string' && body.credential.length < 8192 ? body.credential : '';
+  const profile = credential ? await verifyGoogleIdToken(credential, env.GOOGLE_CLIENT_ID, googleKeys(keysUrl(env, url))) : null;
+  if (!profile) return error('Google sign-in failed. Try again.', 401);
+  const secret = await store(env, profile.sub).signIn(profile);
+  return json(toUser(profile), 200, { 'Set-Cookie': sessionCookie(`${profile.sub}.${secret}`, url, COOKIE_MAX_AGE) });
 }
 
 async function handleApi(request: Request, env: Env, url: URL): Promise<Response> {
@@ -72,22 +79,22 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     if (origin && origin !== url.origin) return error('Cross-origin request refused.', 403);
   }
 
-  if (route === 'POST /api/auth/register') return handleAuth(request, env, url, 'register');
-  if (route === 'POST /api/auth/login') return handleAuth(request, env, url, 'login');
+  // The client ID isn't a secret: the sign-in button needs it in the page.
+  if (route === 'GET /api/config') return json({ googleClientId: env.GOOGLE_CLIENT_ID });
+  if (route === 'POST /api/auth/google') return handleGoogleSignIn(request, env, url);
 
   const session = readSession(request);
-  const stub = session && store(env, session.username);
+  const stub = session && store(env, session.userId);
 
   if (route === 'POST /api/auth/logout') {
     if (session && stub) await stub.logout(session.secret);
     return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie('', url, 0) });
   }
 
-  if (!session || !stub || (await stub.checkSession(session.secret)) === null) {
-    return error('Sign in to continue.', 401);
-  }
+  const profile = session && stub ? await stub.checkSession(session.secret) : null;
+  if (!session || !stub || !profile) return error('Sign in to continue.', 401);
 
-  if (route === 'GET /api/me') return json({ username: session.username });
+  if (route === 'GET /api/me') return json(toUser(profile));
 
   if (route === 'POST /api/sync') {
     const body = (await readJson(request)) as Partial<SyncRequest> | null;

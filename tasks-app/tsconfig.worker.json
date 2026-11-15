@@ -3,8 +3,16 @@
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/worker.tsbuildinfo",
     "outDir": "./node_modules/.tmp/worker",
-    "lib": ["ES2023"],
-    "types": ["./worker/worker-configuration.d.ts"]
+    "lib": [
+      "ES2023"
+    ],
+    "types": [
+      "./worker/worker-configuration.d.ts"
+    ]
   },
-  "include": ["worker", "shared"]
+  "include": [
+    "worker",
+    "shared",
+    "test/google.test.ts"
+  ]
 }

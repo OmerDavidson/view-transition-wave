@@ -22,16 +22,16 @@ function done(tx: IDBTransaction): Promise<void> {
   });
 }
 
-export function databaseName(username: string): string {
-  return `tasks:${username}`;
+export function databaseName(userId: string): string {
+  return `tasks:${userId}`;
 }
 
-/** Each signed-in user gets their own database on the device. */
+/** Each signed-in Google account gets their own database on the device. */
 export class LocalDatabase {
   private constructor(private readonly db: IDBDatabase) {}
 
-  static async open(username: string): Promise<LocalDatabase> {
-    const request = indexedDB.open(databaseName(username), VERSION);
+  static async open(userId: string): Promise<LocalDatabase> {
+    const request = indexedDB.open(databaseName(userId), VERSION);
     request.addEventListener('upgradeneeded', () => {
       const db = request.result;
       if (!db.objectStoreNames.contains('tasks')) db.createObjectStore('tasks', { keyPath: 'id' });
@@ -40,8 +40,8 @@ export class LocalDatabase {
     return new LocalDatabase(await promisify(request));
   }
 
-  static async destroy(username: string): Promise<void> {
-    await promisify(indexedDB.deleteDatabase(databaseName(username)));
+  static async destroy(userId: string): Promise<void> {
+    await promisify(indexedDB.deleteDatabase(databaseName(userId)));
   }
 
   close(): void {

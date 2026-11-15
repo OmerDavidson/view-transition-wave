@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { REAUTH_EVENT, useSession, useTasks } from '../App';
 import { Alert, Check, ChevronLeft, ChevronRight, CloudOff, Logout, Plus, Sync } from '../components/Icons';
 import { addDays, addMonths, format, formatSpan, isValidIso, startOfWeek, today, type IsoDate } from '../lib/dates';
@@ -146,14 +146,20 @@ function SyncBadge() {
 }
 
 function AccountButton() {
-  const { store, signOut } = useSession();
+  const { user, signOut } = useSession();
+  const [pictureFailed, setPictureFailed] = useState(false);
+  const label = user.email || user.name;
   return (
-    <button type="button" className="account" onClick={() => void signOut()} title={`Signed in as ${store.username}. Sign out`}>
-      <span className="avatar" aria-hidden="true">
-        {store.username[0].toUpperCase()}
-      </span>
+    <button type="button" className="account" onClick={() => void signOut()} title={`Signed in as ${label}. Sign out`}>
+      {user.picture && !pictureFailed ? (
+        <img className="avatar" src={user.picture} alt="" referrerPolicy="no-referrer" onError={() => setPictureFailed(true)} />
+      ) : (
+        <span className="avatar" aria-hidden="true">
+          {(user.name[0] ?? '?').toUpperCase()}
+        </span>
+      )}
       <Logout className="account-logout" />
-      <span className="visually-hidden">Sign out {store.username}</span>
+      <span className="visually-hidden">Sign out {label}</span>
     </button>
   );
 }

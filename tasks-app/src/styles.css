@@ -281,12 +281,20 @@ h2 {
   margin: -8px 0 0;
 }
 
-.auth-tabs {
-  width: 100%;
+.google-button {
+  display: flex;
+  justify-content: center;
+  min-height: 44px;
 }
 
-.auth-tabs button {
-  flex: 1;
+.google-button[hidden] {
+  display: none;
+}
+
+.auth-note {
+  margin: 0 !important;
+  text-align: center;
+  font-size: 0.9rem;
 }
 
 .auth-dialog {
@@ -403,6 +411,22 @@ h2 {
   background: var(--accent-soft);
   color: var(--accent);
   font-weight: 700;
+}
+
+img.avatar {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.account:hover img.avatar + .account-logout {
+  background: rgb(0 0 0 / 0.55);
+  color: #fff;
+  border-radius: 50%;
+  width: 100%;
+  height: 100%;
+  padding: 8px;
 }
 
 .account-logout {
