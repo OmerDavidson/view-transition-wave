@@ -2,7 +2,9 @@
 
 **A shockwave page transition, played on the browser's native [View Transitions](https://developer.mozilla.org/docs/Web/API/View_Transition_API).**
 
-![A wave sweeping a light page into a dark one: the page bends like a lens behind a glowing, colour-fringed front](docs/preview.png)
+**[▶ Try the live demo](https://omerdavidson.github.io/view-transition-wave/)** (best in Chrome or Edge)
+
+[![A wave sweeping a light page into a dark one: the page bends like a lens behind a glowing, colour-fringed front](docs/preview.png)](https://omerdavidson.github.io/view-transition-wave/)
 
 Click, and the page draws in toward the pointer. Then the new state bursts out behind a front that bends the page like a lens, splits it into red, green and blue fringes, blurs it and lights it with colour. The glow lingers on the edges.
 
@@ -127,6 +129,8 @@ npm run typecheck
 npm run build      # tsdown → dist/
 npm run demo       # builds, then serves the repo; open http://localhost:4321/demo/
 ```
+
+Every push to `main` publishes `demo/` to GitHub Pages (`.github/workflows/demo.yml`).
 
 ## License
 
