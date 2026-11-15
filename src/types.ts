@@ -73,6 +73,13 @@ export interface WaveTransitionOptions {
    * `'ignore'`: always the wave.
    */
   reducedMotion?: 'respect' | 'ignore';
+  /**
+   * `'auto'` (default): when frames come slower than 25 fps, the wave drops its costliest parts while it
+   * plays (the colour split, then the blur, then the bending, then the light's resolution), and the next
+   * wave starts where this one ended, trying one step higher after a wave with frames to spare.
+   * `'full'`: always everything.
+   */
+  quality?: 'auto' | 'full';
   /** View transition types (`:active-view-transition-type()`), passed to the browser. */
   types?: readonly string[];
   /** Aborting skips the transition, like `skipTransition()`. The update still runs. */

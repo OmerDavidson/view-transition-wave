@@ -1,14 +1,10 @@
 import { WAVE_LIGHT_TRANSITION_NAME } from './effects';
-import { WAVE_FILTER_ID } from './filter';
-import { OVERFLOW_MARGIN } from './plan';
+import { INITIAL_MASKS, OVERFLOW_MARGIN } from './plan';
 
 /** The view transition name the scope carries while a wave plays. */
 export const WAVE_TRANSITION_NAME = 'view-transition-wave';
 /** On `<html>` while a wave plays, so other view transitions on the page are left alone. */
 export const PLAYING_CLASS = 'view-transition-wave-playing';
-/** The masks that split the scope between the new and old snapshot along the front, redrawn every frame. */
-export const REVEAL_PROPERTY = '--view-transition-wave-reveal';
-export const REMAIN_PROPERTY = '--view-transition-wave-remain';
 
 const STYLE_ID = 'view-transition-wave-styles';
 
@@ -17,14 +13,14 @@ const CSS = `
 :root.${PLAYING_CLASS}::view-transition-new(${WAVE_TRANSITION_NAME}) {
   animation: none;
   mix-blend-mode: normal;
-  filter: url(#${WAVE_FILTER_ID});
 }
 :root.${PLAYING_CLASS}::view-transition-old(${WAVE_TRANSITION_NAME}),
 :root.${PLAYING_CLASS}::view-transition-new(${WAVE_TRANSITION_NAME}) {
   /*
    * A mask clips to the box, which would cut off what overflows the scope (a shadow): the snapshots are
-   * laid out a margin wider on every side, the image unscaled in the middle. The filter and masks draw
-   * in that wider box.
+   * laid out a margin wider on every side, the image unscaled in the middle. The masks draw in that
+   * wider box; the filter's region reaches as far. The masks here are the first frame's: from then on
+   * the wave sets them, and the group's filter, frame by frame (see transition.ts).
    */
   left: -${OVERFLOW_MARGIN}px;
   top: -${OVERFLOW_MARGIN}px;
@@ -33,10 +29,10 @@ const CSS = `
   object-fit: none;
 }
 :root.${PLAYING_CLASS}::view-transition-new(${WAVE_TRANSITION_NAME}) {
-  mask-image: var(${REVEAL_PROPERTY});
+  mask-image: ${INITIAL_MASKS.revealed};
 }
 :root.${PLAYING_CLASS}::view-transition-old(${WAVE_TRANSITION_NAME}) {
-  mask-image: var(${REMAIN_PROPERTY});
+  mask-image: ${INITIAL_MASKS.remaining};
 }
 :root.${PLAYING_CLASS}::view-transition-group(${WAVE_LIGHT_TRANSITION_NAME}),
 :root.${PLAYING_CLASS}::view-transition-new(${WAVE_LIGHT_TRANSITION_NAME}) {

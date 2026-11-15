@@ -112,9 +112,14 @@ precision highp float; in float vA; in float vR; in float vPt; out vec4 o;
 void main() { float r = length(gl_PointCoord - 0.5) * vPt; float cov = clamp(vR - r + 0.5, 0.0, 1.0); o = vec4(vec3(cov * vA), cov * vA); }`;
 
 export interface WaveEffects {
-  canvas: HTMLCanvasElement;
+  /** Puts the canvas in the document, over the scope, as a layer of the transition. */
+  attach: () => void;
+  /** Takes the canvas out of the transition, so it stays over the live page while the light fades. */
+  leaveTransition: () => void;
   /** Draws one frame; `dots` holds x, y, size, alpha per spark. */
   render: (frame: WaveFrame, dots: Float32Array, dotCount: number) => void;
+  /** Draws at this fraction of the full resolution from the next frame (the light is soft). */
+  setResolution: (fraction: number) => void;
   /** Moves the canvas over the scope again (after a scroll). */
   place: (left: number, top: number) => void;
   remove: () => void;
@@ -159,18 +164,89 @@ const paletteOf = (config: WaveConfig): string[] => {
   return PALETTES[palette as keyof typeof PALETTES] ?? PALETTES.aurora;
 };
 
-/** A canvas over the scope with the wave's light, or null without WebGL2 (the page still bends). */
-export const createWaveEffects = (config: WaveConfig, box: ScopeBox): WaveEffects | null => {
+interface Renderer {
+  canvas: HTMLCanvasElement;
+  gl: WebGL2RenderingContext;
+  light: ReturnType<typeof compile>;
+  dots: ReturnType<typeof compile>;
+  fullScreen: WebGLVertexArrayObject | null;
+  dotArray: WebGLVertexArrayObject | null;
+  dotBuffer: WebGLBuffer | null;
+  /** The wave drawing with it now. */
+  owner: object | null;
+}
+
+/**
+ * One canvas and WebGL context for every wave: compiling the shaders takes tens of ms (more on some
+ * GPUs), which would otherwise delay the start of each wave. `undefined` until first asked for, `null`
+ * without WebGL2.
+ */
+let shared: Renderer | null | undefined;
+
+const renderer = (): Renderer | null => {
+  if (shared !== undefined) {
+    return shared;
+  }
   const canvas = document.createElement('canvas');
   const gl = canvas.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false });
   if (!gl) {
+    shared = null;
+    return shared;
+  }
+  let light: ReturnType<typeof compile>;
+  let dots: ReturnType<typeof compile>;
+  try {
+    light = compile(gl, VERTEX_FULL, FRAGMENT_LIGHT);
+    dots = compile(gl, VERTEX_DOTS, FRAGMENT_DOTS);
+  } catch {
+    shared = null;
+    return shared;
+  }
+  const fullScreen = gl.createVertexArray();
+  const dotArray = gl.createVertexArray();
+  const dotBuffer = gl.createBuffer();
+  gl.bindVertexArray(dotArray);
+  gl.bindBuffer(gl.ARRAY_BUFFER, dotBuffer);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 16, 0);
+  gl.bindVertexArray(null);
+  canvas.setAttribute('aria-hidden', 'true');
+  // A lost context (the GPU was reset) is built again for the next wave.
+  canvas.addEventListener('webglcontextlost', () => {
+    if (shared?.canvas === canvas) {
+      shared = undefined;
+    }
+  });
+  shared = { canvas, gl, light, dots, fullScreen, dotArray, dotBuffer, owner: null };
+  return shared;
+};
+
+/** Compiles the shaders ahead of the first wave. */
+export const prepareEffects = (): void => {
+  renderer();
+};
+
+/** A canvas over the scope with the wave's light, or null without WebGL2 (the page still bends). */
+export const createWaveEffects = (config: WaveConfig, box: ScopeBox): WaveEffects | null => {
+  const found = renderer();
+  if (!found) {
     return null;
   }
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const { canvas, gl, light, dots, fullScreen, dotArray, dotBuffer } = found;
+  const lease = {};
+  found.owner = lease;
+  /** Whether this wave still has the canvas: a later wave may have taken it. */
+  const owns = () => found.owner === lease && shared === found;
+
+  const fullDpr = Math.min(window.devicePixelRatio || 1, 2);
+  let dpr = fullDpr;
   const { width, height } = box;
-  canvas.width = Math.round(width * dpr);
-  canvas.height = Math.round(height * dpr);
-  canvas.setAttribute('aria-hidden', 'true');
+  const resize = () => {
+    // Setting the size also clears what the last wave drew.
+    canvas.width = Math.max(1, Math.round(width * dpr));
+    canvas.height = Math.max(1, Math.round(height * dpr));
+  };
+  resize();
   Object.assign(canvas.style, {
     position: 'fixed',
     left: `${box.left}px`,
@@ -183,28 +259,14 @@ export const createWaveEffects = (config: WaveConfig, box: ScopeBox): WaveEffect
     viewTransitionName: WAVE_LIGHT_TRANSITION_NAME,
   });
 
-  let light: ReturnType<typeof compile>;
-  let dots: ReturnType<typeof compile>;
-  try {
-    light = compile(gl, VERTEX_FULL, FRAGMENT_LIGHT);
-    dots = compile(gl, VERTEX_DOTS, FRAGMENT_DOTS);
-  } catch {
-    return null;
-  }
-  const fullScreen = gl.createVertexArray();
-  const dotArray = gl.createVertexArray();
-  const dotBuffer = gl.createBuffer();
-  gl.bindVertexArray(dotArray);
-  gl.bindBuffer(gl.ARRAY_BUFFER, dotBuffer);
-  gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 16, 0);
-  gl.bindVertexArray(null);
-
   const colors = paletteOf(config);
   const palette = new Float32Array(24);
   colors.slice(0, 8).forEach((hex, index) => palette.set(hexToOklab(hex), index * 3));
 
   const render = (frame: WaveFrame, dotData: Float32Array, dotCount: number) => {
+    if (!owns()) {
+      return;
+    }
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.disable(gl.BLEND);
     gl.useProgram(light.program);
@@ -258,15 +320,34 @@ export const createWaveEffects = (config: WaveConfig, box: ScopeBox): WaveEffect
   };
 
   return {
-    canvas,
+    attach: () => {
+      if (owns()) {
+        document.body.appendChild(canvas);
+      }
+    },
+    leaveTransition: () => {
+      if (owns()) {
+        canvas.style.viewTransitionName = '';
+      }
+    },
     render,
+    setResolution: (fraction) => {
+      if (owns()) {
+        dpr = fullDpr * fraction;
+        resize();
+      }
+    },
     place: (left, top) => {
-      canvas.style.left = `${left}px`;
-      canvas.style.top = `${top}px`;
+      if (owns()) {
+        canvas.style.left = `${left}px`;
+        canvas.style.top = `${top}px`;
+      }
     },
     remove: () => {
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
-      canvas.remove();
+      if (owns()) {
+        found.owner = null;
+        canvas.remove();
+      }
     },
   };
 };

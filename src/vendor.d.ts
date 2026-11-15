@@ -8,6 +8,10 @@ declare module 'distortion-wave/src/core.js' {
     travel: number;
     amplitude: number;
     lensWidth: number;
+    /** How far the front wobbles, in px. */
+    swell: number;
+    /** How far past the farthest corner the front travels, in px. */
+    margin: number;
     aberration: number;
     blur: number;
     blurAhead: number;
